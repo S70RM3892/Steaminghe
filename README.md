@@ -73,3 +73,12 @@ webhelper 凍結 / 終了コード伝搬 / ログインタイムアウトを検�
   （UI なし・ヘッドレス）を実験的に載せている。これが安定すれば、Wine 上の
   `steam.exe` を丸ごと置き換えられて負荷は大きく下がる。steaminghe の
   `STEAM_EXE` / 判定関数を差し替える形で対応する予定。
+
+## ネイティブ APK 内で完結させる道
+
+Android 向けに作り直した APK の中で、Steamworks SDK 1.63（androidarm64）を使って完結させる設計は
+[docs/apk-native-steam.md](docs/apk-native-steam.md) にまとめた。APK の中身は次で調べる。
+
+```sh
+tools/inspect-apk.sh game.apk [steamworks_sdk_dir]
+```

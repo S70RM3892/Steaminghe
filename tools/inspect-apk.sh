@@ -42,6 +42,9 @@ if [ "$engine" = "Unity (IL2CPP)" ]; then
   if [ -f "$tmp/assets/bin/Data/Managed/Metadata/global-metadata.dat" ] &&
      grep -aqE 'Steamworks|SteamAPI_Init' "$tmp/assets/bin/Data/Managed/Metadata/global-metadata.dat"; then
     echo "IL2CPP メタデータに Steamworks の参照あり（Steamworks.NET 等）→ P/Invoke 先は \"steam_api\"/\"steam_api64\""
+    echo "== Steam 確認に使われている API（メタデータ中の名前）"
+    grep -aoE 'Steamworks\.NET|Facepunch\.Steamworks|SteamManager|RestartAppIfNecessary|SteamAPI_Init[A-Za-z]*|IsSteamRunning|steam_appid(\.txt)?|BIsSubscribed[A-Za-z]*|GetAppID|BLoggedOn|DllNotFoundException' \
+      "$tmp/assets/bin/Data/Managed/Metadata/global-metadata.dat" | sort | uniq -c | sort -rn
   fi
   rm -rf "$tmp"
 fi

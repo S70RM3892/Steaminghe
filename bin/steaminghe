@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# steaminghe - Wine/Box64 上の本物の Steam クライアントを、ゲームの起動条件として
+# 最小負荷で動かすランチャー。Winlator / GameNative のコンテナや Termux+Box64+Wine 環境で使う。
+#
+#   steaminghe launch <profile.conf>   プロファイルに従い Steam→ゲームを起動
+#   steaminghe steam-start             Steam を起動してログイン完了まで待つ
+#   steaminghe steam-stop              Steam を正常終了させる
+#   steaminghe status                  Steam のログイン状態と PID を表示
+#
+# MODE=online  : ゲーム中ずっと Steam を常駐させる（優先度を下げ、CPU を絞る）
+# MODE=offline : ゲームが Steam に接続し終えたら Steam を凍結(freeze)または終了(shutdown)する
+set -u
+
+WINE=${WINE:-wine}
+PGREP=${PGREP:-pgrep}
+STEAM_EXE=${STEAM_EXE:-'C:\Program Files (x86)\Steam\steam.exe'}
+STEAM_ARGS=${STEAM_ARGS:--silent}
+STEAM_LOGIN_TIMEOUT=${STEAM_LOGIN_TIMEOUT:-180}
+POLL_SEC=${POLL_SEC:-2}
+# Steam 本体と CEF 子プロセス。ゲーム側 exe には一致させない
+STEAM_PROC_RE=${STEAM_PROC_RE:-'(^|[\\/ ])steam(webhelper|service)?\.exe'}
+WEBHELPER_RE=${WEBHELPER_RE:-'(^|[\\/ ])steamwebhelper\.exe'}
+REG_STEAM='HKCU\Software\Valve\Steam'
+
+FROZEN_PIDS=()
+
+log() { printf '[steaminghe] %s\n' "$*" >&2; }
+die() { log "error: $*"; exit 1; }
+
+# reg query の出力から値を取り出す。REG_DWORD は 10 進に変換する
+reg_get() {
+  local key=$1 name=$2 line type val
+  line=$("$WINE" reg query "$key" /v "$name" 2>/dev/null | tr -d '\r' | awk -v n="$name" '$1 == n')
+  [ -n "$line" ] || return 1
+  type=$(awk '{print $2}' <<<"$line")
+  val=$(awk '{print $3}' <<<"$line")
+  if [ "$type" = REG_DWORD ]; then
+    printf '%d\n' "$val"
+  else
+    printf '%s\n' "$val"
+  fi
+}
+
+steam_logged_in() {
+  local user
+  user=$(reg_get "$REG_STEAM\\ActiveProcess" ActiveUser) || return 1
+  [ "$user" -ne 0 ]
+}
+
+app_running() {
+  local r
+  r=$(reg_get "$REG_STEAM\\Apps\\$1" Running) || return 1
+  [ "$r" -eq 1 ]
+}
+
+steam_pids() { "$PGREP" -if "$STEAM_PROC_RE" 2>/dev/null; }
+webhelper_pids() { "$PGREP" -if "$WEBHELPER_RE" 2>/dev/null; }
+
+wait_until() {
+  local timeout=$1 waited=0
+  shift
+  until "$@"; do
+    [ "$waited" -ge "$timeout" ] && return 1
+    sleep "$POLL_SEC"
+    waited=$((waited + POLL_SEC))
+  done
+}
+
+steam_start() {
+  if steam_logged_in && [ -n "$(steam_pids)" ]; then
+    log "Steam は起動済み・ログイン済み"
+    return 0
+  fi
+  log "Steam を起動: $STEAM_EXE $STEAM_ARGS"
+  # shellcheck disable=SC2086  # STEAM_ARGS は意図的に単語分割する
+  "$WINE" "$STEAM_EXE" $STEAM_ARGS >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  log "ログイン完了待ち（最大 ${STEAM_LOGIN_TIMEOUT}s。初回は Steam の画面でログインしておくこと）"
+  wait_until "$STEAM_LOGIN_TIMEOUT" steam_logged_in || die "Steam のログインを確認できない"
+  log "Steam ログイン確認"
+}
+
+steam_stop() {
+  thaw_all
+  if [ -z "$(steam_pids)" ]; then
+    return 0
+  fi
+  log "Steam を終了"
+  "$WINE" "$STEAM_EXE" -shutdown >/dev/null 2>&1 || true
+}
+
+# 負荷を下げる: nice 19、CPU を指定コア（通常は省電力コア）に固定
+throttle() {
+  local pids
+  pids=$(steam_pids)
+  [ -n "$pids" ] || return 0
+  if [ -n "${STEAM_NICE:-}" ]; then
+    # shellcheck disable=SC2086
+    renice -n "$STEAM_NICE" -p $pids >/dev/null 2>&1 || log "renice 失敗（無視）"
+  fi
+  if [ -n "${STEAM_CPUS:-}" ]; then
+    if command -v taskset >/dev/null 2>&1; then
+      local p
+      for p in $pids; do taskset -a -p -c "$STEAM_CPUS" "$p" >/dev/null 2>&1 || true; done
+    else
+      log "taskset が無いので CPU 固定はスキップ"
+    fi
+  fi
+}
+
+freeze() {
+  local p
+  for p in "$@"; do
+    if kill -STOP "$p" 2>/dev/null; then
+      FROZEN_PIDS+=("$p")
+    fi
+  done
+  [ "$#" -gt 0 ] && log "凍結: $*"
+}
+
+thaw_all() {
+  [ "${#FROZEN_PIDS[@]}" -gt 0 ] || return 0
+  kill -CONT "${FROZEN_PIDS[@]}" 2>/dev/null || true
+  log "凍結解除: ${FROZEN_PIDS[*]}"
+  FROZEN_PIDS=()
+}
+
+load_profile() {
+  local f=$1
+  [ -f "$f" ] || die "プロファイルが無い: $f"
+  # shellcheck disable=SC1090
+  . "$f"
+  : "${GAME_EXE:?GAME_EXE が未設定}"
+  : "${APPID:?APPID が未設定}"
+  MODE=${MODE:-online}
+  OFFLINE_STRATEGY=${OFFLINE_STRATEGY:-freeze}
+  GRACE_SEC=${GRACE_SEC:-20}
+  RUNNING_TIMEOUT=${RUNNING_TIMEOUT:-120}
+  WEBHELPER=${WEBHELPER:-keep}
+  STEAM_NICE=${STEAM_NICE:-19}
+  STEAM_CPUS=${STEAM_CPUS:-}
+  KEEP_STEAM_AFTER=${KEEP_STEAM_AFTER:-0}
+  case $MODE in online | offline) ;; *) die "MODE は online か offline: $MODE" ;; esac
+  case $OFFLINE_STRATEGY in freeze | shutdown) ;; *) die "OFFLINE_STRATEGY は freeze か shutdown: $OFFLINE_STRATEGY" ;; esac
+  case $WEBHELPER in keep | freeze) ;; *) die "WEBHELPER は keep か freeze: $WEBHELPER" ;; esac
+}
+
+launch() {
+  load_profile "$1"
+  trap 'thaw_all' EXIT
+  trap 'exit 130' INT TERM
+
+  steam_start
+  throttle
+  if [ "$WEBHELPER" = freeze ]; then
+    # shellcheck disable=SC2046
+    freeze $(webhelper_pids)
+  fi
+
+  log "ゲーム起動: $GAME_EXE (appid=$APPID, mode=$MODE)"
+  (
+    [ -n "${GAME_DIR:-}" ] && cd "$GAME_DIR"
+    # shellcheck disable=SC2086
+    exec "$WINE" "$GAME_EXE" ${GAME_ARGS:-}
+  ) &
+  local game=$!
+
+  if [ "$MODE" = offline ]; then
+    # Steam が Apps\<appid>\Running=1 を立てる = ゲームが SteamAPI_Init を通過した目安
+    if wait_until "$RUNNING_TIMEOUT" app_running "$APPID"; then
+      log "ゲームの Steam 接続を確認。${GRACE_SEC}s 後に Steam を止める"
+    else
+      log "Running フラグを確認できない。${GRACE_SEC}s 後に Steam を止める"
+    fi
+    sleep "$GRACE_SEC"
+    if kill -0 "$game" 2>/dev/null; then
+      if [ "$OFFLINE_STRATEGY" = freeze ]; then
+        # shellcheck disable=SC2046
+        freeze $(steam_pids)
+      else
+        steam_stop
+      fi
+    fi
+  fi
+
+  wait "$game"
+  local rc=$?
+  log "ゲーム終了 (rc=$rc)"
+  thaw_all
+  if [ "$KEEP_STEAM_AFTER" != 1 ]; then
+    steam_stop
+  fi
+  return "$rc"
+}
+
+status() {
+  local user pids
+  user=$(reg_get "$REG_STEAM\\ActiveProcess" ActiveUser 2>/dev/null) || user=?
+  pids=$(steam_pids | tr '\n' ' ')
+  printf 'ActiveUser: %s\nSteam PIDs: %s\n' "$user" "${pids:-none}"
+}
+
+case ${1:-} in
+  launch) [ $# -eq 2 ] || die "usage: steaminghe launch <profile.conf>"; launch "$2" ;;
+  steam-start) steam_start ;;
+  steam-stop) steam_stop ;;
+  status) status ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+S=$MOCK_STATE
+pat=${*: -1}
+case $pat in
+  *'steamwebhelper\.exe') cat "$S/webhelper_pids" 2>/dev/null ;;
+  *) cat "$S/all_pids" 2>/dev/null ;;
+esac

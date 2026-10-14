@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# テスト用 wine。$MOCK_STATE にレジストリと Steam プロセスの状態を持つ
+set -u
+S=$MOCK_STATE
+echo "wine $*" >>"$S/calls"
+regfile() { printf '%s/reg/%s' "$S" "$(printf '%s__%s' "$1" "$2" | tr '\\ ' '__')"; }
+setreg() { mkdir -p "$S/reg"; echo "$3" >"$(regfile "$1" "$2")"; }
+case $1 in
+  reg)
+    f=$(regfile "$3" "$5")
+    [ -f "$f" ] || exit 1
+    printf '\r\n%s\r\n    %s    REG_DWORD    %s\r\n' "$3" "$5" "$(cat "$f")"
+    ;;
+  *steam.exe)
+    if [ "${2:-}" = -shutdown ]; then
+      [ -f "$S/all_pids" ] && kill -CONT $(cat "$S/all_pids") 2>/dev/null
+      [ -f "$S/all_pids" ] && kill $(cat "$S/all_pids") 2>/dev/null
+      rm -f "$S/all_pids" "$S/webhelper_pids"
+      setreg 'HKCU\Software\Valve\Steam\ActiveProcess' ActiveUser 0x0
+      exit 0
+    fi
+    sleep 300 & main=$!
+    sleep 300 & web=$!
+    echo "$main $web" | tr ' ' '\n' >"$S/all_pids"
+    echo "$web" >"$S/webhelper_pids"
+    sleep 1
+    setreg 'HKCU\Software\Valve\Steam\ActiveProcess' ActiveUser 0x2a
+    ;;
+  *game.exe)
+    sleep 0.5
+    setreg "HKCU\\Software\\Valve\\Steam\\Apps\\$MOCK_APPID" Running 0x1
+    # ゲーム実行中の Steam プロセス状態を記録
+    sleep "${MOCK_GAME_SEC:-3}"
+    for p in $(cat "$S/all_pids" 2>/dev/null); do
+      printf '%s %s\n' "$p" "$(awk '{print $3}' /proc/$p/stat 2>/dev/null || echo gone)"
+    done >"$S/states_at_game_end"
+    [ -f "$S/all_pids" ] || echo none >"$S/states_at_game_end"
+    exit "${MOCK_GAME_RC:-0}"
+    ;;
+esac

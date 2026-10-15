@@ -84,4 +84,11 @@ check "ログイン timeout で失敗" [ "$rc" -ne 0 ]
 unset STEAM_LOGIN_TIMEOUT STEAM_EXE
 teardown
 
+# 8. perf-log: モック adb の出力から温度・クロックを CSV にする
+d=$(mktemp -d)
+ADB=$ROOT/tests/mocks/adb timeout 1.5 "$ROOT/tools/perf-log.sh" 1 "$d/p.csv" >/dev/null 2>&1
+check "perf-log: ヘッダ" grep -qx 'time,battery_c,cpu_max_c,gpu_max_c,skin_c,cpu0_mhz,cpu1_mhz,cpu2_mhz' "$d/p.csv"
+check "perf-log: 値（電池38.5 CPU最大72.25 GPU58 表面40.1 MHz）" grep -qE '^[0-9:]+,38\.5,72\.25,58\.0,40\.1,1785,3532,0$' "$d/p.csv"
+rm -rf "$d"
+
 exit $fail

@@ -74,7 +74,12 @@ webhelper 凍結 / 終了コード伝搬 / ログインタイムアウトを検�
   `steam.exe` を丸ごと置き換えられて負荷は大きく下がる。steaminghe の
   `STEAM_EXE` / 判定関数を差し替える形で対応する予定。
 
-## ネイティブ APK 内で完結させる道
+## ロードマップ
+
+家の環境（REDMAGIC 10 Pro + PC）での作業手順と計測方法は [docs/roadmap.md](docs/roadmap.md) にまとめた。
+温度と CPU クロックの記録は `tools/perf-log.sh`（adb 経由、root 不要）で行う。
+
+## ネイティブ APK 内で完結させる道（保留）
 
 Android 向けに作り直した APK の中で、Steamworks SDK 1.63（androidarm64）を使って完結させる設計は
 [docs/apk-native-steam.md](docs/apk-native-steam.md) にまとめた。APK の中身は次で調べる。

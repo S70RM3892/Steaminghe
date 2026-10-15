@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# テスト用 adb: shell の中身は実行せず、固定の端末出力を返す
+case $1 in
+  get-state) echo device ;;
+  shell)
+    case $2 in
+      *'wc -l'*) echo 3 ;;
+      *) printf '%s\r\n' 385 \
+        'Current temperatures from HAL:' \
+        '	Temperature{mValue=61.5, mType=0, mName=cpu-0-0, mStatus=0}' \
+        '	Temperature{mValue=72.25, mType=0, mName=cpu-1-0, mStatus=1}' \
+        '	Temperature{mValue=58.0, mType=1, mName=gpu, mStatus=0}' \
+        '	Temperature{mValue=40.1, mType=3, mName=skin, mStatus=0}' \
+        'Current cooling devices from HAL:' \
+        '===FREQ' 1785600 3532800 0 ;;
+    esac ;;
+esac
